@@ -10,7 +10,7 @@ from src.llm import get_llm
 from src.tools.production_tools import (
     fetch_production_data, fetch_equipment_health, inspect_database_schema
 )
-from src.analytics.production_analytics import compute_production_trends
+from src.analytics.production_analytics import _production_trend
 from src.database import get_schema_info
 import json
 import ast
@@ -174,7 +174,7 @@ RULES:
             try:
                 if len(tool_args.get("well_ids", [])) == 1:
 
-                    analytics = compute_production_trends(
+                    analytics = _production_trend(
                         well_id=tool_args["well_ids"][0],
                         date_expression=tool_args.get(
                             "date_expression", "last_30_days"

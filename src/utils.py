@@ -1,6 +1,9 @@
 from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
-from typing import Tuple
+from typing import Tuple, Union, Optional, List
+import json
+
+
 
 
 def resolve_date_range(expression: str) -> Tuple[date, date]:
@@ -55,3 +58,55 @@ def resolve_date_range(expression: str) -> Tuple[date, date]:
         return date(2023, 1, 1), date(2024, 12, 31)
 
     raise ValueError(f'Unrecognised date expression: "{expression}"')
+
+
+def parse_list_param(value: Union[list, str, None],
+                      param_name: str = 'parameter') -> list:
+    """
+    Coerce an LLM tool parameter to a Python list.
+
+    Some NVIDIA (and other) models serialise list arguments as JSON
+    strings rather than native JSON arrays. For example, the LLM may
+    send '["A001-W01"]' (string) instead of ['A001-W01'] (list).
+    This guard handles both cases safely.
+
+    Args:
+        value:      The raw value received from the LLM tool call.
+        param_name: Name of the parameter, used in error messages.
+
+    Returns:
+        A Python list. Never None.
+
+    Raises:
+        ValueError: If value is None or empty after coercion.
+    """
+    if value is None:
+        raise ValueError(f'{param_name} is required and cannot be None.')
+
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if v]
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        # Try JSON parse first: handles '["A001-W01"]'
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if v]
+            return [str(parsed).strip()]
+        except json.JSONDecodeError:
+            pass
+        # Fallback: comma-separated string 'A001-W01, A001-W02'
+        return [v.strip() for v in stripped.split(',') if v.strip()]
+
+    # Any other type: wrap it
+    return [str(value)]
+
+
+def parse_optional_list(value: Union[list, str, None]) -> Optional[list]:
+    """Same as parse_list_param but returns None if value is None/empty."""
+    if value is None or value == '' or value == [] or value == '[]':
+        return None
+    result = parse_list_param(value, 'optional_list')
+    return result if result else None
+

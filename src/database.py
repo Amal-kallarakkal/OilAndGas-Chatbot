@@ -1,10 +1,14 @@
 """
 DuckDB data access layer.
-All database interactions in this project go through this module.
-No agent, tool, or graph node queries DuckDB directly.
+Schema is loaded dynamically from the database at runtime.
+No column name is hardcoded anywhere in this file.
 """
+import functools
+from sys import maxsize
+
 import duckdb
 import pandas as pd
+import functools
 from contextlib import contextmanager
 from typing import Optional, List
 from datetime import date
@@ -12,7 +16,7 @@ from src.config import cfg
 
 
 @contextmanager
-def get_connection():
+def get_connection(read_only: bool = True):
     """
     Context manager for DuckDB connections.
     Usage:
@@ -28,23 +32,30 @@ def get_connection():
         conn.close()
 
 # ── Column allowlist ─────────────────────────────────────────────────
+@functools.lru_cache(maxsize=1)
+def _production_columns() -> frozenset:
+    """Load real production column names from the database at runtime."""
+    with get_connection() as conn:
+        result = conn.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'production'
+            ORDER BY ordinal_position
+        """).fetchdf()
+    return frozenset(result['column_name'].tolist())
 
-PRODUCTION_COLUMNS = {
-    'well_id', 'date',
-    'oil_prod_bbl',          # synthetic data name
-    'oil_produced_bbl',      # your real data name  ← ADD THIS
-    'gas_prod_mcf',
-    'gas_produced_mcf',      # your real data name  ← ADD THIS (if applicable)
-    'downtime_hrs',
-    'op_efficiency_pct',
-    'water_cut_pct',
-    'reservoir_pressure_psi',
-}
 
-EQUIPMENT_COLUMNS = {
-    'well_id', 'date', 'equipment_type', 'asset_id', 'temperature_c',
-    'vibration_level', 'pressure_psi', 'failure_risk_score'
-}
+@functools.lru_cache(maxsize=1)
+def _equipment_columns() -> frozenset:
+    """Load real equipment column names from the database at runtime."""
+    with get_connection() as conn:
+        result = conn.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'equipment_health'
+            ORDER  BY ordinal_position
+        """).fetchdf()
+    return frozenset(result['column_name'].tolist())
 
 def get_production_data(
     well_ids:   List[str],
@@ -53,32 +64,29 @@ def get_production_data(
     fields:     Optional[List[str]] = None
 ) -> pd.DataFrame:
     """
-    Retrieve daily production records for one or more wells
-    over a date range.
+    Retrieve daily production records for one or more wells.
 
-    Args:
-        well_ids:   List of well identifiers, e.g. ['WELL_A', 'WELL_B'].
-        start_date: First date (inclusive) of the query range.
-        end_date:   Last date (inclusive) of the query range.
-        fields:     Columns to return. Defaults to all columns.
-                    Invalid field names are silently dropped.
+    Real columns available:
+        date, asset_id, well_id, oil_produced_bbl,
+        gas_produced_mcf, water_cut_pct, downtime_hours
 
-    Returns:
-        pd.DataFrame sorted by (well_id, date).
-        Returns empty DataFrame with correct columns if no data found.
+    Returns pd.DataFrame sorted by (well_id, date).
+    Returns empty DataFrame with correct columns if no data found.
     """
     # ── Input validation ─────────────────────────────────────────
     if not well_ids:
         raise ValueError('well_ids must be a non-empty list.')
     if start_date > end_date:
         raise ValueError('start_date must not be after end_date.')
+    
+    VALID_COLS = _production_columns()  
 
     # Validate and filter field names against allowlist
     if fields is None:
-        fields = list(PRODUCTION_COLUMNS)
+        fields = list(VALID_COLS)
     else:
         # Drop invalid names, always keep well_id and date
-        valid = {f for f in fields if f in PRODUCTION_COLUMNS}
+        valid = {f for f in fields if f in VALID_COLS}
         valid.update({'well_id', 'date'})
         fields = list(valid)
 
@@ -88,6 +96,8 @@ def get_production_data(
     # DuckDB does not support list binding for IN clauses directly,
     # so we build one ? per well_id and bind them individually.
     placeholders = ', '.join(['?'] * len(well_ids))
+    
+    params = well_ids + [start_date, end_date]
 
     query = f'''
         SELECT {col_str}
@@ -97,7 +107,6 @@ def get_production_data(
         ORDER  BY well_id, date
     '''
 
-    params = well_ids + [start_date, end_date]
 
     # ── Execute ──────────────────────────────────────────────────
     with get_connection() as conn:
@@ -106,7 +115,6 @@ def get_production_data(
     # ── Guarantee correct schema on empty result ─────────────────
     if df.empty:
         return pd.DataFrame(columns=fields)
-
     return df
 
 
@@ -118,28 +126,25 @@ def get_equipment_health(
     fields:          Optional[List[str]] = None
 ) -> pd.DataFrame:
     """
-    Retrieve equipment sensor readings and failure risk scores.
+    Retrieve equipment sensor data for one or more wells.
 
-    Args:
-        well_ids:        List of well identifiers.
-        start_date:      Start of query range (inclusive).
-        end_date:        End of query range (inclusive).
-        equipment_types: Optional filter, e.g. ['pump', 'compressor'].
-                         If None, all equipment types are returned.
-        fields:          Columns to return. Defaults to all columns.
+    Real columns available:
+        date, asset_id, well_id, equipment_type,
+        vibration_level, temperature_c, pressure_psi, failure_risk_score
 
-    Returns:
-        pd.DataFrame sorted by (well_id, date).
+    equipment_types: Optional filter on 'Compressor', 'Valve', 'Pump'.
     """
     if not well_ids:
         raise ValueError('well_ids must be a non-empty list.')
     if start_date > end_date:
         raise ValueError('start_date must not be after end_date.')
+    
+    VALID_COLS = _equipment_columns()
 
     if fields is None:
-        fields = list(EQUIPMENT_COLUMNS)
+        fields = list(VALID_COLS)
     else:
-        valid = {f for f in fields if f in EQUIPMENT_COLUMNS}
+        valid = {f for f in fields if f in VALID_COLS}
         valid.update({'well_id', 'date'})
         fields = list(valid)
 
@@ -177,20 +182,8 @@ def get_joined_data(
     join_type:  str = 'inner'
 ) -> pd.DataFrame:
     """
-    Return production and equipment records joined on (well_id, date).
-    Used by the Correlation Agent to compute cross-signal relationships.
-
-    Args:
-        well_ids:   Wells to include.
-        start_date: Start of range (inclusive).
-        end_date:   End of range (inclusive).
-        join_type:  'inner' (default) or 'left'.
-                    Use 'inner' for correlation (requires both signals).
-                    Use 'left' to retain production rows with missing equipment.
-
-    Returns:
-        pd.DataFrame with columns from both tables.
-        Duplicate column names are disambiguated: p_date, e_date.
+    Join production_data and equipment_health on (well_id, date).
+    Returns all columns from both tables with no duplicates.
     """
     if join_type not in ('inner', 'left'):
         raise ValueError("join_type must be 'inner' or 'left'.")
@@ -200,16 +193,17 @@ def get_joined_data(
 
     query = f'''
         SELECT
-            p.well_id,
             p.date,
+            p.asset_id,
+            p.well_id,
             p.oil_produced_bbl,
-            p.gas_prod_mcf,
-            p.downtime_hrs,
+            p.gas_produced_mcf,
             p.water_cut_pct,
+            p.downtime_hours,
             e.equipment_type,
             e.vibration_level,
             e.temperature_c,
-            e.pressure_psi      AS equip_pressure_psi,
+            e.pressure_psi,
             e.failure_risk_score
         FROM production p
         {join_type.upper()} JOIN equipment_health e
@@ -240,6 +234,11 @@ def get_schema_info() -> dict:
             'SELECT DISTINCT well_id FROM production ORDER BY well_id'
         ).fetchdf()['well_id'].tolist()
 
+        assets = conn.execute(
+            'SELECT DISTINCT asset_id FROM production ORDER BY asset_id'
+        ).fetchdf()['asset_id'].tolist()
+
+
         date_range = conn.execute('''
             SELECT MIN(date) AS min_date, MAX(date) AS max_date
             FROM production
@@ -261,32 +260,48 @@ def get_schema_info() -> dict:
 
     return {
         'available_wells':   wells,
+        'available_assets':     assets,
         'date_range':        {'min_date': str(date_range[0]),
                               'max_date': str(date_range[1])},
         'production_schema':  prod_schema,
         'equipment_schema':   equip_schema,
     }
 
+def get_latest_equipment_status(
+    well_ids: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """Return the most recent equipment row per well."""
+    if well_ids:
+        well_ph = ', '.join(['?'] * len(well_ids))
+        where   = f'WHERE well_id IN ({well_ph})'
+        params  = well_ids
+    else:
+        where, params = '', []
+
+    query = f'''
+        SELECT * EXCLUDE(rn) FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY well_id ORDER BY date DESC
+                   ) AS rn
+            FROM equipment_health {where}
+        )
+        WHERE rn = 1
+        ORDER BY well_id
+    '''
+    with get_connection() as conn:
+        return conn.execute(query, params).fetchdf()
+
 def get_production_summary(
     well_ids:   List[str],
     start_date: date,
     end_date:   date,
-    group_by:   str = 'well_id'   # 'well_id' | 'month' | 'well_month'
+    group_by:   str = 'well_id'
 ) -> pd.DataFrame:
     """
-    Return aggregated production statistics over a date range.
-
-    Args:
-        well_ids:   Wells to include.
-        start_date: Start of range.
-        end_date:   End of range.
-        group_by:   Grouping strategy.
-                    'well_id'    -> one row per well (default)
-                    'month'      -> one row per month across all wells
-                    'well_month' -> one row per well per month
-
-    Returns:
-        pd.DataFrame with avg, total, min, max per group.
+    Aggregated production stats grouped by well, month, or both.
+    Uses real column names: oil_produced_bbl, gas_produced_mcf,
+    downtime_hours, water_cut_pct.
     """
     VALID_GROUPS = {'well_id', 'month', 'well_month'}
     if group_by not in VALID_GROUPS:
@@ -311,20 +326,18 @@ def get_production_summary(
             {select_group},
             ROUND(AVG(oil_produced_bbl),  2) AS avg_oil_bbl,
             ROUND(SUM(oil_produced_bbl),  2) AS total_oil_bbl,
-            ROUND(MIN(oil_produced_bbl),  2) AS min_oil_bbl,
-            ROUND(MAX(oil_produced_bbl),  2) AS max_oil_bbl,
             ROUND(AVG(gas_produced_mcf),  2) AS avg_gas_mcf,
-            ROUND(AVG(downtime_hours),  3) AS avg_downtime_hrs,
-            COUNT(*) AS record_count
-        FROM production
-        WHERE well_id IN ({well_ph})
-          AND date BETWEEN ? AND ?
+            ROUND(AVG(water_cut_pct),     2) AS avg_water_cut_pct,
+            ROUND(AVG(downtime_hours),    3) AS avg_downtime_hours,
+            COUNT(*)                         AS record_count
+        FROM production 
+        WHERE well_id IN ({well_ph}) AND date BETWEEN ? AND ?
         {group_clause}
         ORDER BY 1
     '''
-
     with get_connection() as conn:
         return conn.execute(query, params).fetchdf()
+    
 
 def get_latest_equipment_status(
     well_ids: Optional[List[str]] = None

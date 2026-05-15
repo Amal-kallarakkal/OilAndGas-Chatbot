@@ -7,96 +7,98 @@ They receive DataFrames and return structured result dicts.
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
-from typing import Optional
-from datetime import timedelta, date
-from src.database import get_production_data
+from src.database import get_production_data, _production_columns
 from src.utils import resolve_date_range
 
-def compute_production_trends(
+# The canonical oil column name in the real database
+# Detected once at import time from the live schema
+def _detect_oil_column() -> str:
+    """Find the oil production column in the real schema."""
+    candidates = [
+        'oil_produced_bbl',    # your real column
+        'oil_prod_bbl',        # synthetic data name
+        'oil_production_bbl',
+        'daily_oil_bbl',
+    ]
+    real_cols = _production_columns()
+    for c in candidates:
+        if c in real_cols:
+            return c
+    raise RuntimeError(
+        f'No oil production column found. '
+        f'Available columns: {sorted(real_cols)}'
+    )
+
+
+def _production_trend(
         well_id: str,
         date_expression: str = 'last_60_days',
         metric: str = None
 ) -> dict:
     """
-    Compute the production trend for a single well over a date range.
-    Compares the recent half of the window to the prior half.
+    Compute the production trend for one well over a date window.
+    Compares the recent half vs the prior half of the window.
 
-    Returns a dict with:
+    Args:
+        well_id:         Well identifier, e.g. 'A001-W01'.
+        date_expression: Time window. Default 'last_60_days'.
+        metric:          Column to analyse. Auto-detected if None.
+                         Auto-detect finds 'oil_produced_bbl' in your schema.
+
+    Returns dict with:
         trend_direction: 'declining' | 'stable' | 'improving'
-        slope:           bbl/day change (negative = declining)
-        pct_change:      % change recent vs prior window
-        recent_mean:     average in recent window
-        prior_mean:      average in prior window
-        confidence:      'high' | 'medium' | 'low'
-        data_points:     number of rows used
-        is_significant:  True if p-value < 0.05
+        slope:           units/day change
+        pct_change:      % change recent vs prior
+        recent_mean, prior_mean, p_value, confidence, data_points
     """
+
     if metric is None:
-        from src.database import get_schema_info
-        schema = get_schema_info()
-        prod_cols = [c['column_name'] for c in schema['production_schema']]
-
-        for candidate in ['oil_prod_bbl', 'oil_produced_bbl', 'oil_production_bbl',
-                          'daily_oil_bbl', 'oil_bbl']:
-            if candidate in prod_cols:
-                metric = candidate
-                break
-
-            if metric is None:
-                return {
-                'status': 'column_not_found',
-                'available_columns': prod_cols,
-                'message': 'Could not find an oil production column. '
-                           'Set metric= explicitly.'
-            }
+        metric = _detect_oil_column()
 
     start, end = resolve_date_range(date_expression)
-    df = get_production_data([well_id], start, end, fields=[metric].sort_values('date'))
+    df = get_production_data(
+        [well_id], start, end,
+        fields=[metric]
+    ).sort_values('date')
 
     if len(df) < 6:
-        return { 
-            'status': 'insufficient_data',
-            'data_points': len(df), 
+        return {
+            'status':           'insufficient_data',
+            'well_id':          well_id,
+            'data_points':      len(df),
             'minimum_required': 6
         }
-    # split into prior and recent halves
-    mid = len(df) // 2
-    prior = df.iloc[:mid]
-    recent = df.iloc[mid:]
 
-    recent_mean = recent[metric].mean()
-    prior_mean = prior[metric].mean()
-    pct_change = ((recent_mean - prior_mean) / prior_mean) * 100 if prior_mean != 0 else np.inf
+    mid         = len(df) // 2
+    prior_mean  = df.iloc[:mid][metric].mean()
+    recent_mean = df.iloc[mid:][metric].mean()
+    pct_change  = ((recent_mean - prior_mean) / prior_mean) * 100
 
-    # linear regression over the full window to get slope
     x = np.arange(len(df))
     y = df[metric].values
-    slope, _, r_value, p_value, _ = stats.linregress(x, y)
+    slope, _, r_val, p_val, _ = stats.linregress(x, y)
 
-    # classify trend direction
-    if pct_change < -5 and p_value < 0.05:
-        direction = 'declining'
-    elif pct_change > 5 and p_value < 0.05:
-        direction = 'improving'
-    else:
-        direction = 'stable'
-    
-    confidence = ('high' if p_value < 0.01 and len(df) > 21 
-                  else 'medium' if p_value < 0.05 else 'low')
-    
+    direction = ('declining' if pct_change < -5 and p_val < 0.05 else
+                 'improving' if pct_change >  5 and p_val < 0.05 else
+                 'stable')
+
+    confidence = ('high'   if p_val < 0.01 and len(df) >= 21 else
+                  'medium' if p_val < 0.05 else 'low')
+
     return {
-        'well_id': well_id,
-        'trend_direction': direction,
-        'metric': metric,
-        'date_range': [str(start), str(end)],
-        'slope': round(float(slope), 4),
-        'pct_change': round(pct_change, 2),
-        'recent_mean': round(recent_mean, 2),
-        'prior_mean': round(prior_mean, 2),
-        'p_value': round(p_value, 4),
-        'r_squred': round(r_value**2, 4),
-        'confidence': confidence,
-        'data_points': len(df),
-        'is_significant': p_value < 0.05
+        'well_id':          well_id,
+        'metric':           metric,
+        'date_range':       [str(start), str(end)],
+        'trend_direction':  direction,
+        'slope':            round(float(slope), 4),
+        'pct_change':       round(pct_change, 2),
+        'recent_mean':      round(recent_mean, 2),
+        'prior_mean':       round(prior_mean, 2),
+        'p_value':          round(p_val, 4),
+        'r_squared':        round(r_val**2, 4),
+        'confidence':       confidence,
+        'is_significant':   bool(p_val < 0.05),
+        'data_points':      len(df),
     }
+
 

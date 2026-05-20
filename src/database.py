@@ -220,14 +220,10 @@ def get_joined_data(
     return df
 def get_schema_info() -> dict:
     """
-    Returns metadata about the database: available wells, date ranges,
-    and column schemas for both tables.
-    Used by the Query Planning Agent to build valid query plans.
-
-    Returns:
-        dict with keys: available_wells, date_range, production_schema,
-                        equipment_schema
+    Return database metadata: wells, date range, column names.
+    Used by the Query Planning Agent and the system prompt builder.
     """
+
     with get_connection() as conn:
 
         wells = conn.execute(

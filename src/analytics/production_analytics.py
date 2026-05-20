@@ -86,6 +86,7 @@ def _production_trend(
                   'medium' if p_val < 0.05 else 'low')
 
     return {
+        'status':           'ok',
         'well_id':          well_id,
         'metric':           metric,
         'date_range':       [str(start), str(end)],

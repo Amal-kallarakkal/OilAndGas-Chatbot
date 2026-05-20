@@ -12,7 +12,7 @@ from src.tools.production_tools import (
 )
 from src.utils import parse_list_param, parse_optional_list
 from src.analytics.production_analytics import (
-    compute_production_trend, _detect_oil_column
+    _production_trend, _detect_oil_column
 )
 
 REAL_WELL   = 'A001-W01'
@@ -189,16 +189,16 @@ class TestToolWrappers:
 class TestAnalytics:
 
     def test_trend_uses_real_column(self):
-        result = compute_production_trend(REAL_WELL, 'last_60_days')
+        result = _production_trend(REAL_WELL, 'last_60_days')
         assert 'status' not in result or result['status'] != 'column_not_found'
         assert result.get('metric') == 'oil_produced_bbl'
 
     def test_trend_unknown_well_returns_insufficient(self):
-        result = compute_production_trend(FAKE_WELL, 'last_30_days')
+        result = _production_trend(FAKE_WELL, 'last_30_days')
         assert result['status'] == 'insufficient_data'
 
     def test_trend_direction_field_present(self):
-        result = compute_production_trend(REAL_WELL, 'last_60_days')
+        result = _production_trend(REAL_WELL, 'last_60_days')
         if 'status' not in result:
             assert result['trend_direction'] in ('declining', 'stable', 'improving')
             assert 'p_value'     in result

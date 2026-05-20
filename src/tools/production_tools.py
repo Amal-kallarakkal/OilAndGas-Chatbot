@@ -4,14 +4,10 @@ These functions are decorated with @tool so the LLM can call them.
 They translate LLM-friendly string inputs into typed Python calls
 against the database functions in src/database.py.
 """
-from email.policy import default
 
-from altair import value
 from langchain_core.tools import tool
 from datetime import date
 from typing import Optional, Union
-
-from narwhals import col
 from src.database import (
     get_production_data, get_equipment_health, get_joined_data,
     get_production_summary, get_latest_equipment_status, get_schema_info
@@ -28,9 +24,10 @@ def _df_to_summary(df, extra:dict = None)->str:
     """
     if df.empty:
         return json.dumps({'status':'no_data', 'row_count':'0'})
-    
+    # print('inside df summary')
     numerica_cols = df.select_dtypes('number').columns.tolist()
     summary = {
+        'status':   'ok',
         'row_count': len(df),
         'wells':     df['well_id'].unique().tolist() if 'well_id' in 
                      df.columns else [],
@@ -61,7 +58,7 @@ def _parse_list(value: Union[list, str]) -> list:
         return value
     if isinstance(value, str):
         try:
-            parsed = json.load(value)
+            parsed = json.loads(value)
             return parsed if isinstance(parsed, list) else [parsed]
         except json.JSONDecodeError:
             # Treat as a single comma-separated string
@@ -105,8 +102,12 @@ def fetch_production_data(
         fields = parse_optional_list(fields)
 
     start, end = resolve_date_range(date_expression)
+    # print('DEBUG: inside fetch production data')
+    # print('wells:', well_ids)
+    # print(start, ',', end)
+    # print('fields:', fields)
     df = get_production_data(well_ids, start, end, fields)
-
+    # print('df:', df)
     if df.empty:
         return json.dumps({
             'status': 'no_data',
@@ -207,7 +208,17 @@ def fetch_production_summary(
         return json.dumps({'status': 'no_data', 'wells': well_ids})
 
     # Summary tool returns the full table (it's already aggregated)
-    return df.to_json(orient='records', date_format='iso', default_handler=str)
+    return json.dumps({
+        'status': 'ok',
+        'row_count': len(df),
+        'data': json.loads(
+            df.to_json(
+                orient='records',
+                date_format='iso',
+                default_handler=str
+            )
+        )
+    })
 
 
 # ── Tool 5: Latest Equipment Status ─────────────────────────────────
@@ -232,7 +243,16 @@ def fetch_latest_equipment_status(
     if df.empty:
         return json.dumps({'status': 'no_data'})
 
-    return df.to_json(orient='records', date_format='iso', default_handler=str)
-
+    return json.dumps({
+        'status': 'ok',
+        'row_count': len(df),
+        'data': json.loads(
+            df.to_json(
+                orient='records',
+                date_format='iso',
+                default_handler=str
+            )
+        )
+    })
 
 

@@ -1,40 +1,37 @@
-"""
-Interactive test runner for the single-agent prototype.
-Run: python tests/run_agent.py
-"""
-from src.agents.ops_agents import OpsAgent
+from src.pipeline import run_pipeline
 import json
 
-agent = OpsAgent()
-
-print('Oil & Gas Operations Agent — Phase 3 Prototype')
-print('Type "exit" to quit, "debug" to see full state.\n')
-
+print('Oil & Gas Multi-Agent Pipeline — Phase 4')
+print('Commands: "exit" | "debug" (toggle) | any query\n')
 debug_mode = False
 
 while True:
-    user_input = input('you:').strip()
-    if not user_input:
-        continue
-    if user_input.lower() == 'exit':
-        print('Goodbye!')
-        break
-    if user_input.lower() == 'debug':
+    user_input = input('You: ').strip()
+    if not user_input:          continue
+    if user_input == 'exit':    break
+    if user_input == 'debug':
         debug_mode = not debug_mode
-        print(f'Debug mode: {debug_mode}')
-        continue
+        print(f'Debug: {debug_mode}'); continue
 
-    print('\nprocessing...')
-    result = agent.run(user_input)
+    print('\nProcessing...')
+    state = run_pipeline(user_input)
 
     if debug_mode:
-        print('\n[DEBUG] debug tool called:', result.get('tools_called'))
-        print('[DEBUG] LLM calls:', result.get('llm_calls'))
-
-        if result.get('analytics'):
-            print('[DEBUG] Analytics results:')
-            print( json.dumps(result.get('analytics'), indent=2))
-            print()
-
-    print(f'\nAssistant: {result["response"]}\n')
+        intent = state.get('intent', {})
+        plan   = state.get('execution_plan', {})
+        if plan is not None:            
+            print(f'\n[DEBUG] Intent:     {intent.get("label")}  (conf: {intent.get("confidence"):.2f})')
+            print(f'[DEBUG] Well IDs:   {intent.get("well_ids")}')
+            print('plan type:', plan)
+            print(f'[DEBUG] Tool:       {plan.get("tool_name")}')
+            print(f'[DEBUG] Retrieval:  {state.get("retrieval_status")}')
+            if state.get('analytics_result'):
+                ar = state['analytics_result']
+                print(f'[DEBUG] Analytics:  {ar.get("status")} | type={ar.get("type","n/a")}')
+                if ar.get('trend_direction'):
+                    print(f'[DEBUG]   trend={ar["trend_direction"]} | pct={ar.get("pct_change")}% | conf={ar.get("confidence")}')
+            print(f'[DEBUG] LLM calls:  {state.get("llm_call_count")}')
+            if state.get('error_log'):
+                print(f'[DEBUG] Errors:     {state["error_log"]}')
+    print(f'\nAssistant: {state["final_response"]}\n')
     print('-' * 60)

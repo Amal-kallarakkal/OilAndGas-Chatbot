@@ -27,7 +27,7 @@ STRICT RULES:
 6. Keep the response concise: 3-6 sentences for simple queries,
    up to 10 sentences for complex analyses.'''
 
-def run_explanation_agent(state: PipelineState) -> PipelineState:
+def run_explanation_agent(state: PipelineState) -> dict:
     """
     Generate the final natural language response.
     Builds a clean, tool-free message context.
@@ -67,25 +67,29 @@ def run_explanation_agent(state: PipelineState) -> PipelineState:
 
     try:
         response = llm.invoke(messages)
-        state['llm_call_count'] += 1
-        state['final_response'] = response.content
-
+        confidence_statement = ''
         # Extract confidence from response if stated.
         content_lower = response.content.lower()
         if '[high confidence]' in content_lower:
-            state['confidence_statement'] = 'HIGH'
+            confidence_statement = 'HIGH'
         elif '[medium confidence]' in content_lower:
-            state['confidence_statement'] = 'MEDIUM'
+            confidence_statement = 'MEDIUM'
         elif '[low confidence]' in content_lower:
-            state['confidence_statement'] = 'LOW'
+            confidence_statement = 'LOW'
         else:
-            state['confidence_statement'] = 'UNSPECIFIED'
+            confidence_statement = 'UNSPECIFIED'
 
     except Exception as e:
-        state['error_log'].append(f'ExplanationAgent error: {e}')
-        state['final_response'] = (
-            'I encountered an error generating the explanation. '
-            f'The retrieved data is available in the debug state. Error: {e}'
-        )
+        return {
+            'final_response':   'I encountered an error generating the explanation. '
+                                f'The retrieved data is available in the debug state. Error: {e}',
+            'error_log'     :   [f'ExplanationAgent error: {e}']
+        }
+        
 
-    return state
+    return {
+        'llm_call_count':       state['llm_call_count'] + 1,
+        'final_response':       response.content,
+        'confidence_statement': confidence_statement,
+        'error_log':            []
+    }

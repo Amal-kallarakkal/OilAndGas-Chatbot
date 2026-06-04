@@ -14,7 +14,9 @@ from src.schema_registry import registry
 
 def _compute_trend(state: PipelineState) -> dict:
     """Compute production trend. Used for PRODUCTION_QUERY and DECLINE_ANALYSIS."""
-    df = state.get('production_df')
+    df = pd.DataFrame(
+        state.get('production_df', [])
+    )
     plan = state['execution_plan']
     intent = state['intent']
     if df is None or (hasattr(df, 'empty') and df.empty):
@@ -46,7 +48,9 @@ def _compute_trend(state: PipelineState) -> dict:
 
 def _compute_risk(state: PipelineState) -> dict:
     """Compute risk assessment from equipment DataFrame."""
-    df = state.get('equipment_df')
+    df = pd.DataFrame(
+        state.get('equipment_df', [])
+    ) 
     if df is None or (hasattr(df, 'empty') and df.empty):
         return {'status': 'no_data'}
     
@@ -84,34 +88,38 @@ def _compute_risk(state: PipelineState) -> dict:
     }
 
 
-def run_analytics_agent(state: PipelineState) -> PipelineState:
+def run_analytics_agent(state: PipelineState) -> dict:
     """Dispatch to the correct analytics function based on analytics_type."""
 
     plan = state.get('execution_plan')
+    analytics_result = {}
     # print('inside run_analytics_agent------')
     if not plan or not plan.get('run_analytics'):
-        state['analytics_result'] = {'status': 'skipped'}
-        return state
+        analytics_result = {'status': 'skipped'}
     
     analytics_type = plan.get('analytics_type', 'none')
     # print(analytics_type)
     try:
         if analytics_type == 'trend':
-            state['analytics_result'] = _compute_trend(state)
+            analytics_result = _compute_trend(state)
         elif analytics_type == 'risk':
-            state['analytics_result'] = _compute_risk(state)
+            analytics_result = _compute_risk(state)
         else:
-            state['analytics_result'] = {'status': 'skipped'}
+            analytics_result = {'status': 'skipped'}
 
                 
     except Exception as e:
-        state['error_log'].append(f'AnalyticsAgent error: {e}')
-        state['analytics_result'] = {'status': 'error', 'message': str(e)}
-    
+        analytics_result = {'status': 'error', 'message': str(e)}
+        return {
+            'analytics_result': analytics_result,
+            'error_log':        [f'AnalyticsAgent error: {e}']
+        }
+            
 
-    return state
-
-
+    return {
+        'analytics_result': analytics_result,
+        'error_log':        []
+    }
 
     
 

@@ -30,7 +30,7 @@ def _resolve_well_ids(intent: IntentResult) -> List[str]:
     # No well or asset specified: return all wells
     return registry.well_ids
 
-def run_planning_agent(state: PipelineState) -> PipelineState:
+def run_planning_agent(state: PipelineState) -> dict:
     """
     Build the execution plan from the intent.
     All routing decisions are deterministic rule-based logic.
@@ -102,5 +102,7 @@ def run_planning_agent(state: PipelineState) -> PipelineState:
             scope           = 'all_wells'
         )
 
-    state['execution_plan'] = plan
-    return state
+    return {
+        'execution_plan': plan,
+        'error_log':       []
+    }

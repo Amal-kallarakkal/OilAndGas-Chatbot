@@ -8,6 +8,7 @@ Reads from state: execution_plan
 Writes to state: production_df, equipment_df, tool_result_json,
                  retrieval_status
 """
+from datetime import date
 import json
 import pandas as pd
 from src.pipeline_state import PipelineState
@@ -26,7 +27,7 @@ TOOL_REGISTRY = {
     'fetch_production_summary': fetch_production_summary,
 }
 
-def run_retrieval_agent(state: PipelineState) -> PipelineState:
+def run_retrieval_agent(state: PipelineState) -> dict:
     """
     Execute the tool call from the execution plan.
     Stores both the JSON summary (for LLM) and raw DataFrame (for analytics).
@@ -36,9 +37,11 @@ def run_retrieval_agent(state: PipelineState) -> PipelineState:
     tool_args = plan['tool_args']
 
     if tool_name not in TOOL_REGISTRY:
-        state['error_log'].append(f'Unknown tool: {tool_name}')
-        state['retrieval_status'] = 'error'
-        return state
+        
+        return {
+            'error_log': [f'Retrieval agent error: {e}'],
+            'retrieval_status': 'error'
+        }
     
     try:
         # ── Execute the @tool function ────────────────────────────
@@ -46,34 +49,73 @@ def run_retrieval_agent(state: PipelineState) -> PipelineState:
         json_out = tool_fn.invoke(tool_args)
         parsed = json.loads(json_out)
 
-        state['tool_result_json'] = json_out
-        state['retrieval_status'] = parsed.get('status')
-
+      
         # ── Also fetch raw DataFrames for analytics agent ─────────
         # The @tool returns a JSON summary for the LLM.
         # The analytics agent needs the raw DataFrame.
         # We fetch it separately here to avoid duplicating logic in
         # the @tool itself.
 
+        production_df = []
+        equipment_df = []
+
         if tool_name == 'fetch_production_data' and parsed.get('status') == 'ok':
             well_ids = parse_list_param(tool_args.get('well_ids'), [])
             start, end = resolve_date_range(tool_args.get('date_expression', 'last_30_days'))
-            state['production_df'] = get_production_data(well_ids, start, end)
-            
+            production_df = json.loads(
+                get_production_data(
+                    well_ids,
+                    start,
+                    end
+                ).to_json(
+                    orient='records',
+                    date_format='iso'
+                )
+            )
         elif tool_name == 'fetch_equipment_health' and parsed.get('status') == 'ok':
             well_ids = parse_list_param(tool_args.get('well_ids'), [])
             start, end = resolve_date_range(tool_args.get('date_expression', 'last_30_days'))
-            state['equipment_df'] = get_equipment_health(well_ids, start, end)
+
+            equipment_df = json.loads(
+                get_equipment_health(
+                    well_ids,
+                    start,
+                    end
+                ).to_json(
+                    orient='records',
+                    date_format='iso'
+                )
+            )
+
         elif tool_name == 'fetch_production_summary' and parsed.get('status') == 'ok':
             well_ids = parse_list_param(tool_args.get('well_ids'), [])
             start, end = resolve_date_range(tool_args.get('date_expression', 'last_30_days'))
-            state['production_df'] = get_production_data(well_ids, start, end)
+
+            production_df = json.loads(
+                get_production_data(
+                    well_ids,
+                    start,
+                    end
+                ).to_json(
+                    orient='records',
+                    date_format='iso'
+                )
+            )
 
     except Exception as e:
-        state['error_log'].append(f'Retrieval_agent error: {e}')
-        state['retrieval_status'] = 'error'
+        return {
+            'error_log': f'Retrieval_agent error: {e}',
+            'retrieval_status': 'error'
+        }
+        
+    return {
+        'tool_result_json': json_out,
+        'retrieval_status': parsed.get('status'),
+        'production_df'   : production_df,
+        'equipment_df'    : equipment_df,
+        'error_log':        []
+    }
 
-    return state
 
 
 

@@ -86,7 +86,7 @@ def _extract_json(text: str) -> dict:
         raise ValueError(f'No JSON object found in LLM response: {text[:200]}')
     return json.loads(match.group())
 
-def run_intent_agent(state: PipelineState) -> PipelineState:
+def run_intent_agent(state: PipelineState) -> dict:
     """
     Classify the user's intent and extract entities.
     Writes state['intent'] and increments state['llm_call_count'].
@@ -100,34 +100,39 @@ def run_intent_agent(state: PipelineState) -> PipelineState:
     print('messages: ', messages)
     try:
         response = llm.invoke(messages)
-        state['llm_call_count'] += 1
         parsed = _extract_json(response.content)
         print('\n\n parsed result:', parsed)
         # Validate label
         label = parsed.get('label','UNKNOWN')
         if label not in _INTENT_LABELS:
             label = 'UNKNOWN'
-
-        state['intent'] = IntentResult(
-            label             = label,
-            well_ids          = parsed.get('well_ids', []),
-            asset_ids         = parsed.get('asset_ids', []),
-            date_expression   = parsed.get('date_expression', _DEFAULT_DATE),
-            metric            = parsed.get('metric', _DEFAULT_METRIC),
-            confidence        = parsed.get('confidence', 0.5),
-            needs_clarification = parsed.get('needs_clarification', False)
-        )
-
+        return {
+            'intent':           IntentResult(
+                                    label             = label,
+                                    well_ids          = parsed.get('well_ids', []),
+                                    asset_ids         = parsed.get('asset_ids', []),
+                                    date_expression   = parsed.get('date_expression', _DEFAULT_DATE),
+                                    metric            = parsed.get('metric', _DEFAULT_METRIC),
+                                    confidence        = parsed.get('confidence', 0.5),
+                                    needs_clarification = parsed.get('needs_clarification', False)
+                                ),
+            'llm_call_count':   state['llm_call_count'] + 1,
+            'error_log':        []
+        }
+        
     except Exception as e:
         print(f'Intent_agent_error: {e}')
-        state['error_log'].append(f'Intent_agent_error: {e}')
-        state['intent'] = IntentResult(
+        fallback_intent = IntentResult(
             label = 'UNKNOWN', well_ids=[], asset_ids=[],
             date_expression=_DEFAULT_DATE, metric= _DEFAULT_METRIC,
             confidence=0.0, needs_clarification=True
         )
 
-    return state
+    return {
+        'intent': fallback_intent,
+        'llm_call_count':   state['llm_call_count'] + 1,
+        'error_log': [f'Intent agent error: {e}']
+    }
 
 
 

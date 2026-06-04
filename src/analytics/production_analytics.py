@@ -86,20 +86,22 @@ def _production_trend(
                   'medium' if p_val < 0.05 else 'low')
 
     return {
-        'status':           'ok',
-        'well_id':          well_id,
-        'metric':           metric,
-        'date_range':       [str(start), str(end)],
-        'trend_direction':  direction,
-        'slope':            round(float(slope), 4),
-        'pct_change':       round(pct_change, 2),
-        'recent_mean':      round(recent_mean, 2),
-        'prior_mean':       round(prior_mean, 2),
-        'p_value':          round(p_val, 4),
-        'r_squared':        round(r_val**2, 4),
-        'confidence':       confidence,
-        'is_significant':   bool(p_val < 0.05),
-        'data_points':      len(df),
-    }
+    'status':           'ok',
+    'well_id':          well_id,
+    'metric':           metric,
+    'date_range':       [str(start), str(end)],
+    'trend_direction':  direction,
+
+    'slope':            float(round(slope, 4)),
+    'pct_change':       float(round(pct_change, 2)),
+    'recent_mean':      float(round(recent_mean, 2)),
+    'prior_mean':       float(round(prior_mean, 2)),
+    'p_value':          float(round(p_val, 4)),
+    'r_squared':        float(round(r_val**2, 4)),
+
+    'confidence':       confidence,
+    'is_significant':   bool(p_val < 0.05),
+    'data_points':      int(len(df)),
+}
 
 
